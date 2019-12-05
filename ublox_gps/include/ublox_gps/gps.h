@@ -316,6 +316,14 @@ class Gps {
    * the ublox manual first.
    */
   bool setTimtm2(uint8_t rate);
+
+  /**
+   * @brief send the speed to the 
+   * @param  timetag : the timetag for the ESF-MEAS
+   * @param  speed   : the speed m/s to be sent
+   * @return {bool}  : always return true.
+   */
+  bool sendSpeed(uint32_t timetag, double speed);
  
   /**
    * @brief Configure the U-Blox send rate of the message & subscribe to the

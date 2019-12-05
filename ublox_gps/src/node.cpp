@@ -83,6 +83,8 @@ uint8_t ublox_node::fixModeFromString(const std::string& mode) {
 // u-blox ROS Node
 //
 UbloxNode::UbloxNode() {
+  _last_speed_timestamp = NAN;
+  _last_speed_timetag = 0;
   initialize();
 }
 
@@ -330,6 +332,10 @@ void UbloxNode::subscribe() {
 
   for(int i = 0; i < components_.size(); i++)
     components_[i]->subscribe();
+
+  _steering_sub = nh->subscribe("/vehicle/steering_report", 1, &UbloxNode::steeringCallBack, this);
+  _send_speed_pub =
+      nh->advertise<dbw_mkz_msgs::SteeringReport>("speed_send", kROSQueueSize);
 }
 
 void UbloxNode::initializeRosDiagnostics() {
@@ -541,6 +547,29 @@ void UbloxNode::initializeIo() {
       boost::bind(&RawDataStreamPa::ubloxCallback,&rawDataStreamPa_, _1, _2));
     rawDataStreamPa_.initialize();
   }
+}
+
+void UbloxNode::steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& steering_report) {
+    double timestamp = steering_report->header.stamp.toSec();
+    uint32_t timetag = 0;
+    if(!std::isnan(_last_speed_timestamp)) {
+      double delta_time = timestamp - _last_speed_timestamp;
+      timetag = _last_speed_timetag + uint32_t(delta_time*1000);
+    }
+
+    // ROS_INFO("send timetag : %d", timetag);
+    bool do_send = std::isnan(_last_speed_timestamp) || ((timetag % 100) < (_last_speed_timetag % 100));
+    if (do_send)
+    {
+      gps.sendSpeed(timetag, steering_report->speed);
+      dbw_mkz_msgs::SteeringReport steering_report_ = *steering_report;
+      steering_report_.header.stamp = ros::Time::now();
+      steering_report_.header.seq = timetag;
+      _send_speed_pub.publish(steering_report_);
+    }
+
+    _last_speed_timestamp = timestamp;
+    _last_speed_timetag = timetag;
 }
 
 void UbloxNode::initialize() {
@@ -1340,6 +1369,8 @@ void AdrUdrProduct::callbackEsfMEAS(const ublox_msgs::EsfMEAS &m) {
 	nh->advertise<sensor_msgs::Imu>("imu_meas", kROSQueueSize);
     static ros::Publisher time_ref_pub =
 	nh->advertise<sensor_msgs::TimeReference>("interrupt_time", kROSQueueSize);
+    static ros::Publisher speed_pub = 
+	nh->advertise<dbw_mkz_msgs::SteeringReport>("speed_meas", kROSQueueSize);
     
     imu_.header.stamp = ros::Time::now();
     imu_.header.frame_id = frame_id;
@@ -1406,7 +1437,23 @@ void AdrUdrProduct::callbackEsfMEAS(const ublox_msgs::EsfMEAS &m) {
         }
       } else if (data_type == 12) {
         //ROS_INFO("Temperature in celsius: %f", data_value * deg_c); 
-      } else {
+      } else if (data_type == 11) {
+        if (data_sign == 1) {
+          ROS_ERROR("It's not valid for negtive speed value");
+        }
+        else{
+          dbw_mkz_msgs::SteeringReport steering_report;
+          steering_report.header.stamp = ros::Time::now();
+          steering_report.header.frame_id = frame_id;
+          steering_report.header.seq = m.timeTag;
+          steering_report.speed = data_value * 0.001;
+          speed_pub.publish(steering_report);
+          // if(m.calibTtag.size()) {
+          //   ROS_INFO("return speed timetag: %d", m.timeTag);
+          //   ROS_INFO("return     calibTtag : %d", m.calibTtag[0]);
+          // }
+        }
+      }else {
         ROS_INFO("data_type: %u", data_type);
         ROS_INFO("data_value: %u", data_value);
       } 

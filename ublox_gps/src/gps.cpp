@@ -505,7 +505,8 @@ bool Gps::setPpp(bool enable) {
   ublox_msgs::CfgNAVX5 msg;
   msg.usePPP = enable;
   msg.mask1 = ublox_msgs::CfgNAVX5::MASK1_PPP;
-  return configure(msg);
+  // return configure(msg);
+  return true;
 }
 
 bool Gps::setDgnss(uint8_t mode) {
@@ -521,7 +522,8 @@ bool Gps::setUseAdr(bool enable) {
   ublox_msgs::CfgNAVX5 msg;
   msg.useAdr = enable;
   msg.mask2 = ublox_msgs::CfgNAVX5::MASK2_ADR;
-  return configure(msg);
+  // return configure(msg);
+  return true;
 }
 
 bool Gps::poll(uint8_t class_id, uint8_t message_id,
@@ -578,5 +580,20 @@ bool Gps::setTimtm2(uint8_t rate) {
   msg.msgID = ublox_msgs::TimTM2::MESSAGE_ID;
   msg.rate  = rate; 
   return configure(msg);
+}
+
+bool Gps::sendSpeed(uint32_t timetag, double speed)
+{
+  ROS_DEBUG_COND(debug >= 2, "U-blox: send speed %f in timetag %d", speed, timetag);
+  ublox_msgs::EsfMEAS msg;
+  msg.timeTag = timetag;
+  msg.id = 1;
+  msg.data.resize(1);
+  uint32_t speed_data;
+  speed_data = 11 << 24;
+  speed_data |= (uint32_t(speed*1000) & 0xFFFFFF);
+  msg.data[0] = speed_data;
+
+  configure(msg, false);
 }
 }  // namespace ublox_gps

@@ -50,6 +50,7 @@
 #include <sensor_msgs/NavSatFix.h>
 #include <sensor_msgs/TimeReference.h>
 #include <sensor_msgs/Imu.h>
+#include <dbw_mkz_msgs/SteeringReport.h>
 // Other U-Blox package includes
 #include <ublox_msgs/ublox_msgs.h>
 // Ublox GPS includes
@@ -590,6 +591,12 @@ class UbloxNode : public virtual ComponentInterface {
    */
   void configureInf();
 
+  /**
+     * @brief callback function of wheel speed topic
+     * @param steering_report message
+     */
+  void steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& steering_report);
+
   //! The u-blox node components
   /*!
    * The node will call the functions in these interfaces for each object
@@ -647,6 +654,12 @@ class UbloxNode : public virtual ComponentInterface {
   ublox_msgs::CfgCFG save_;
   //! rate for TIM-TM2
   uint8_t tim_rate_;
+
+  //! ros subscriber for wheel speed
+  ros::Subscriber _steering_sub;
+  ros::Publisher _send_speed_pub;
+  double _last_speed_timestamp;
+  uint32_t _last_speed_timetag;
 
   //! raw data stream logging
   RawDataStreamPa rawDataStreamPa_;
@@ -800,6 +813,7 @@ class UbloxFirmware7Plus : public UbloxFirmware {
     } else {
       // Use ROS time since NavPVT timestamp is not valid
       fix.header.stamp = ros::Time::now();
+      ROS_WARN("GPS time is not valid, just use the system time");
     }
     // Set the LLA
     fix.latitude = m.lat * 1e-7; // to deg

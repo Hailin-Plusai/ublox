@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(ublox_msgs)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 find_package(catkin REQUIRED COMPONENTS message_generation ublox_serialization std_msgs sensor_msgs)
 
 add_message_files(DIRECTORY msg)
