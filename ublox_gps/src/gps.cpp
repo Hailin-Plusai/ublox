@@ -386,6 +386,14 @@ bool Gps::configRate(uint16_t meas_rate, uint16_t nav_rate) {
   return configure(rate);
 }
 
+bool Gps::configHnrRate(uint8_t rate) {
+  ROS_DEBUG("Configuring hdr rate to %u hz", rate);
+
+  CfgHNR cfg_hnr;
+  cfg_hnr.highNavRate = rate;
+  return configure(cfg_hnr);
+}
+
 bool Gps::configRtcm(std::vector<uint8_t> ids, std::vector<uint8_t> rates) {
   for(size_t i = 0; i < ids.size(); ++i) {
     ROS_DEBUG("Setting RTCM %d Rate %u", ids[i], rates[i]);

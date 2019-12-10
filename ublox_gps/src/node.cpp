@@ -37,6 +37,14 @@ using namespace ublox_node;
 //
 // ublox_node namespace
 //
+double ublox_node::yawENU2EQDC(double lat, double lon, double x_eqdc, double y_eqdc){
+  double eps = 0.0001;
+  double x_eqdc_e, y_eqdc_e;
+  map_proj->FromLatLon(lat, lon + eps, x_eqdc_e, y_eqdc_e);
+  double yaw_enu_eqdc = atan2(y_eqdc_e - y_eqdc, x_eqdc_e - x_eqdc);
+  return yaw_enu_eqdc;
+}
+
 uint8_t ublox_node::modelFromString(const std::string& model) {
   std::string lower = model;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -162,6 +170,7 @@ void UbloxNode::getRosParams() {
   // Measurement rate params
   nh->param("rate", rate_, 4.0);  // in Hz
   getRosUint("nav_rate", nav_rate, 1);  // # of measurement rate cycles
+  getRosUint("hnr_rate", hnr_rate, 0);  // # HNR rate in Hz
   // RTCM params
   getRosUint("rtcm/ids", rtcm_ids);  // RTCM output message IDs
   getRosUint("rtcm/rates", rtcm_rates);  // RTCM output message rates
@@ -448,6 +457,14 @@ bool UbloxNode::configureUblox() {
           << "ms and navigation rate to " << nav_rate;
         throw std::runtime_error(ss.str());
       }
+
+      if(hnr_rate){
+        if(!gps.configHnrRate(hnr_rate)){
+          std::stringstream ss;
+          ss << "Failed to set HNR rate to " << hnr_rate;
+          throw std::runtime_error(ss.str());
+        }
+      }
       // If device doesn't have SBAS, will receive NACK (causes exception)
       if(supportsGnss("SBAS")) {
         if (!gps.configSbas(enable_sbas_, sbas_usage_, max_sbas_)) {
@@ -573,6 +590,14 @@ void UbloxNode::steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& s
 }
 
 void UbloxNode::initialize() {
+  map_proj.reset(new drive::common::base::MapProj("eqdc", "WGS84"));
+  // Initial the cooradinate projection
+  map_proj->SetEqdc(30.0, 50.0);
+  map_proj->Init();
+  if (!map_proj->Initialized()) {
+    throw std::runtime_error(std::string("Failed to initialize the map_proj"));
+  }
+  
   // Params must be set before initializing IO
   getRosParams();
   initializeIo();
@@ -1307,6 +1332,10 @@ void RawDataProduct::initializeRosDiagnostics() {
 //
 void AdrUdrProduct::getRosParams() {
   nh->param("use_adr", use_adr_, true);
+  nh->param("odom_topic", _odom_topic, std::string("odom"));
+  nh->param("imu_topic", _imu_topic, std::string("imu_data"));
+  nh->param("inspva_topic", _inspva_topic, std::string("inspva"));
+  nh->param("inspvax_topic", _inspvax_topic, std::string("inspvax"));
   // Check the nav rate
   float nav_rate_hz = 1000 / (meas_rate * nav_rate);
   if(nav_rate_hz != 1)
@@ -1323,26 +1352,41 @@ bool AdrUdrProduct::configureUblox() {
 void AdrUdrProduct::subscribe() {
   nh->param("publish/esf/all", enabled["esf"], true);
 
+  gps.subscribe<ublox_msgs::NavTIMEGPS>(boost::bind(
+      &AdrUdrProduct::callbackNavTIMEGPS, this, _1), kSubscribeRate);
+
+  if (enabled["nav_pvt"]){
+    gps.subscribe<ublox_msgs::NavPVT>(boost::bind(
+      &AdrUdrProduct::callbackNavPVT, this, _1), kSubscribeRate);
+  }
+
   // Subscribe to NAV ATT messages
   nh->param("publish/nav/att", enabled["nav_att"], enabled["nav"]);
-  if (enabled["nav_att"])
+  if (enabled["nav_att"]){
     gps.subscribe<ublox_msgs::NavATT>(boost::bind(
         publish<ublox_msgs::NavATT>, _1, "navatt"), kSubscribeRate);
-
+    gps.subscribe<ublox_msgs::NavATT>(boost::bind(
+      &AdrUdrProduct::callbackNavATT, this, _1), kSubscribeRate);
+  }
+    
   // Subscribe to ESF INS messages
   nh->param("publish/esf/ins", enabled["esf_ins"], enabled["esf"]);
-  if (enabled["esf_ins"])
+  if (enabled["esf_ins"]){
     gps.subscribe<ublox_msgs::EsfINS>(boost::bind(
         publish<ublox_msgs::EsfINS>, _1, "esfins"), kSubscribeRate);
+    gps.subscribe<ublox_msgs::EsfINS>(boost::bind(
+      &AdrUdrProduct::callbackEsfINS, this, _1), kSubscribeRate);
+  }
 
   // Subscribe to ESF Meas messages
   nh->param("publish/esf/meas", enabled["esf_meas"], enabled["esf"]);
-  if (enabled["esf_meas"])
+  if (enabled["esf_meas"]){
     gps.subscribe<ublox_msgs::EsfMEAS>(boost::bind(
         publish<ublox_msgs::EsfMEAS>, _1, "esfmeas"), kSubscribeRate);
     // also publish sensor_msgs::Imu
     gps.subscribe<ublox_msgs::EsfMEAS>(boost::bind(
       &AdrUdrProduct::callbackEsfMEAS, this, _1), kSubscribeRate);
+  }
  
   // Subscribe to ESF Raw messages
   nh->param("publish/esf/raw", enabled["esf_raw"], enabled["esf"]);
@@ -1358,9 +1402,26 @@ void AdrUdrProduct::subscribe() {
 
   // Subscribe to HNR PVT messages
   nh->param("publish/hnr/pvt", enabled["hnr_pvt"], true);
-  if (enabled["hnr_pvt"])
+  if (enabled["hnr_pvt"]) {
     gps.subscribe<ublox_msgs::HnrPVT>(boost::bind(
-        publish<ublox_msgs::HnrPVT>, _1, "hnrpvt"), kSubscribeRate);
+      publish<ublox_msgs::HnrPVT>, _1, "hnrpvt"), kSubscribeRate);
+    gps.subscribe<ublox_msgs::HnrPVT>(boost::bind(
+      &AdrUdrProduct::callbackHnrPVT, this, _1), kSubscribeRate);
+  }
+
+  nh->param("publish/hnr/ins", enabled["hnr_ins"], true);
+  if (enabled["hnr_ins"]){
+    gps.subscribe<ublox_msgs::HnrINS>(boost::bind(
+        publish<ublox_msgs::HnrINS>, _1, "hnrins"), kSubscribeRate);
+    gps.subscribe<ublox_msgs::HnrINS>(boost::bind(
+      &AdrUdrProduct::callbackHnrINS, this, _1), kSubscribeRate);
+  }
+
+  // Add the publishers which are use by the drive
+  _odom_pub = nh->advertise<nav_msgs::Odometry>(_odom_topic, kROSQueueSize);
+  _imu_pub = nh->advertise<sensor_msgs::Imu>(_imu_topic, kROSQueueSize);
+  _inspva_pub = nh->advertise<novatel_msgs::INSPVA>(_inspva_topic, kROSQueueSize);
+  _inspvax_pub = nh->advertise<novatel_msgs::INSPVAX>(_inspvax_topic, kROSQueueSize);
 }
 
 void AdrUdrProduct::callbackEsfMEAS(const ublox_msgs::EsfMEAS &m) {
@@ -1371,6 +1432,7 @@ void AdrUdrProduct::callbackEsfMEAS(const ublox_msgs::EsfMEAS &m) {
 	nh->advertise<sensor_msgs::TimeReference>("interrupt_time", kROSQueueSize);
     static ros::Publisher speed_pub = 
 	nh->advertise<dbw_mkz_msgs::SteeringReport>("speed_meas", kROSQueueSize);
+
     
     imu_.header.stamp = ros::Time::now();
     imu_.header.frame_id = frame_id;
@@ -1478,6 +1540,370 @@ void AdrUdrProduct::callbackEsfMEAS(const ublox_msgs::EsfMEAS &m) {
   }
   
   updater->force_update();
+}
+
+void AdrUdrProduct::callbackNavTIMEGPS(const ublox_msgs::NavTIMEGPS &m){
+  ROS_DEBUG("iTOW of NAV-TIME-GPS : %d", m.iTOW);
+  if (!_latest_nav_pvt || !_latest_nav_att) {
+    if(!_latest_nav_pvt) {
+      ROS_WARN("the _latest_nav_pvt is not prepared");
+    }
+    if(!_latest_nav_att) {
+      ROS_WARN("the _latest_nav_att is not prepared");
+    }
+    ROS_WARN("this ublox_msgs::NavTIMEGPS is dropped");
+    return;
+  }
+
+  if (_latest_nav_pvt->iTOW != m.iTOW || _latest_nav_att->iTOW != m.iTOW) {
+    if(_latest_nav_pvt->iTOW != m.iTOW) {
+      ROS_WARN("the _latest_nav_pvt's iTow(%d) is not same with current nav_timegps's iTow(%d)", 
+        _latest_nav_pvt->iTOW, m.iTOW);
+    }
+    if(_latest_nav_att->iTOW != m.iTOW) {
+      ROS_WARN("the _latest_nav_att's iTow(%d) is not same with current nav_timegps's iTow(%d)", 
+        _latest_nav_att->iTOW, m.iTOW);
+    }
+    ROS_WARN("this ublox_msgs::NavTIMEGPS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+  _latest_nav_timegps = boost::make_shared<ublox_msgs::NavTIMEGPS>(m);
+}
+
+void AdrUdrProduct::callbackEsfINS(const ublox_msgs::EsfINS &m){
+  ROS_DEBUG("iTOW of ESF-INS : %d", m.iTOW);
+  if (!_latest_nav_timegps) {
+    ROS_WARN("the _latest_nav_timegps is not prepared");
+    ROS_WARN("this ublox_msgs::EsfINS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  if (_latest_nav_timegps->iTOW != m.iTOW) {
+    ROS_WARN("the _latest_nav_timegps's iTow(%d) is not same with current esf_ins's iTow(%d)", 
+      _latest_nav_timegps->iTOW, m.iTOW);
+    ROS_WARN("this ublox_msgs::EsfINS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+  _latest_esf_ins = boost::make_shared<ublox_msgs::EsfINS>(m);
+
+  // Fill and publish the imu data
+  uint8_t valid_time = _latest_nav_pvt->VALID_DATE | _latest_nav_pvt->VALID_TIME |
+                          _latest_nav_pvt->VALID_FULLY_RESOLVED;
+  if (((_latest_nav_pvt->valid & valid_time) != valid_time)) {
+    ROS_WARN("GPS time in _latest_nav_pvt(iTow: %d) still not be ready for using", m.iTOW);
+    return;
+  }
+
+  sensor_msgs::Imu imu;
+  if (_latest_nav_pvt->nano < 0) {
+    imu.header.stamp.sec = toUtcSeconds(*_latest_nav_pvt) - 1;
+    imu.header.stamp.nsec = (uint32_t)(_latest_nav_pvt->nano + 1e9);
+  }
+  else {
+    imu.header.stamp.sec = toUtcSeconds(*_latest_nav_pvt);
+    imu.header.stamp.nsec = (uint32_t)(_latest_nav_pvt->nano);
+  }
+
+  imu.header.frame_id = "ublox_odom";
+  imu.angular_velocity.x = (m.yAngRate * 1e-3) * M_PI / 180.0; // to [radian/s]
+  imu.angular_velocity.y = (m.xAngRate * 1e-3) * M_PI / 180.0; // to [radian/s]
+  imu.angular_velocity.z = -(m.zAngRate * 1e-3) * M_PI / 180.0; // to [radian/s]
+
+  imu.linear_acceleration.x = m.yAccel * 1e-2; // to [m/s]
+  imu.linear_acceleration.y = m.xAccel * 1e-2; // to [m/s]
+  imu.linear_acceleration.z = -m.zAccel * 1e-2; // to [m/s]
+
+  double roll = (_latest_nav_att->pitch * 1e-5) * M_PI / 180.0;
+  double pitch = (_latest_nav_att->roll * 1e-5) * M_PI / 180.0;
+  double yaw = (90.0 - _latest_nav_att->heading * 1e-5) * M_PI / 180.0;
+  tf::Quaternion orientation;
+  orientation.setRPY(roll, pitch, yaw);
+  imu.orientation.x = orientation[0];
+  imu.orientation.y = orientation[1];
+  imu.orientation.z = orientation[2];
+  imu.orientation.w = orientation[3];
+
+  double varHeading = pow((_latest_nav_att->accHeading * 1e-5) * M_PI / 180.0, 2); // to [radian^2]
+  double varPitch = pow((_latest_nav_att->accRoll * 1e-5) * M_PI / 180.0, 2);    // to [radian^2]
+  double varRoll = pow((_latest_nav_att->accPitch * 1e-5) * M_PI / 180.0, 2);  // to [radian^2]
+
+  imu.orientation_covariance[0] = varRoll;
+  imu.orientation_covariance[4] = varPitch;
+  imu.orientation_covariance[8] = varHeading;
+
+  double varXAngRate = (m.bitfield0 & ublox_msgs::EsfINS::BITFIELD0_X_ANG_RATE_VALID) ? 0.001 : 1000;
+  double varYAngRate = (m.bitfield0 & ublox_msgs::EsfINS::BITFIELD0_Y_ANG_RATE_VALID) ? 0.001 : 1000;
+  double varZAngRate = (m.bitfield0 & ublox_msgs::EsfINS::BITFIELD0_Z_ANG_RATE_VALID) ? 0.001 : 1000;
+  double varXAccel = (m.bitfield0 & ublox_msgs::EsfINS::BITFIELD0_X_ACCEL_VALID) ? 0.001 : 1000;
+  double varYAccel = (m.bitfield0 & ublox_msgs::EsfINS::BITFIELD0_Y_ACCEL_VALID) ? 0.001 : 1000;
+  double varZAccel = (m.bitfield0 & ublox_msgs::EsfINS::BITFIELD0_Z_ACCEL_VALID) ? 0.001 : 1000;
+  
+  imu.angular_velocity_covariance[0] = varXAngRate;
+  imu.angular_velocity_covariance[4] = varYAngRate;
+  imu.angular_velocity_covariance[8] = varZAngRate;
+
+  imu.linear_acceleration_covariance[0] = varXAccel;
+  imu.linear_acceleration_covariance[4] = varYAccel;
+  imu.linear_acceleration_covariance[8] = varZAccel;
+
+  _imu_pub.publish(imu);
+}
+
+void AdrUdrProduct::callbackNavPVT(const ublox_msgs::NavPVT &m){
+  ROS_DEBUG("iTOW of NAV-PVT : %d", m.iTOW);
+  _latest_nav_pvt = boost::make_shared<ublox_msgs::NavPVT>(m);
+}
+
+void AdrUdrProduct::callbackNavATT(const ublox_msgs::NavATT &m){
+  ROS_DEBUG("iTOW of NAV-ATT : %d", m.iTOW);
+  _latest_nav_att = boost::make_shared<ublox_msgs::NavATT>(m);
+}
+
+void AdrUdrProduct::callbackHnrPVT(const ublox_msgs::HnrPVT &m){
+  ROS_DEBUG("iTOW of HNR-PVT : %d", m.iTOW);
+  if (!_latest_esf_ins) {
+    ROS_WARN("the _latest_esf_ins is not prepared");
+    ROS_WARN("this ublox_msgs::HnrPVT(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  if (_latest_esf_ins->iTOW > m.iTOW) {
+    ROS_WARN("the _latest_esf_ins's iTow(%d) is bigger than current hnr_pvt's iTow(%d)",
+      _latest_esf_ins->iTOW, m.iTOW);
+    ROS_WARN("this ublox_msgs::HnrPVT(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  if(m.iTOW - _latest_esf_ins->iTOW > 500) {
+    ROS_WARN("the _latest_esf_ins's iTow(%d) is less 500ms than current hnr_pvt's iTow(%d)",
+      _latest_esf_ins->iTOW, m.iTOW);
+    ROS_WARN("this ublox_msgs::HnrPVT(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  _latest_hnr_pvt = boost::make_shared<ublox_msgs::HnrPVT>(m);
+
+  uint8_t valid_time = _latest_hnr_pvt->VALID_DATE | _latest_hnr_pvt->VALID_TIME |
+                          _latest_hnr_pvt->VALID_FULLY_RESOLVED;
+  if (((_latest_hnr_pvt->valid & valid_time) != valid_time)) {
+    ROS_WARN("GPS time in HNR-PVT(iTow: %d) still not be ready for using", m.iTOW);
+    return;
+  }
+  
+  uint32_t iTow = m.iTOW;
+  uint16_t week_num = _latest_nav_timegps->week;
+
+  double latitude =  _latest_hnr_pvt->lat * 1e-7; // to deg
+  double longitude = _latest_hnr_pvt->lon * 1e-7; // to deg
+  double hMSL = _latest_hnr_pvt->hMSL * 1e-3; // to [m]
+  double hEllips = _latest_hnr_pvt->height * 1e-3; // to [m]
+  double ve = _latest_nav_pvt->velE * 1e-3; // to [m/s]
+  double vn = _latest_nav_pvt->velN * 1e-3; // to [m/s]
+  double vu = _latest_nav_pvt->velD * 1e-3; // to [m/s]
+  double azimuth = _latest_hnr_pvt->headVeh * 1e-5;
+  double roll = _latest_nav_att->roll * 1e-5;
+  double pitch = _latest_nav_att->pitch * 1e-5;
+
+  double hStd = _latest_hnr_pvt->hAcc * 1e-3;
+  double vStd = _latest_hnr_pvt->vAcc * 1e-3;
+  double sStd = _latest_nav_pvt->sAcc * 1e-3;
+
+  // Fill and publish the inspva
+  {
+    novatel_msgs::INSPVA inspva;
+    double undulation = hEllips - hMSL;
+    inspva.header.gps_week = week_num;
+    inspva.header.gps_week_seconds = iTow;
+    inspva.week = week_num;
+    inspva.gpssec = double(iTow) / 1000.0;
+
+    inspva.latitude = latitude;
+    inspva.longitude = longitude;
+    inspva.altitude = hEllips;
+
+    inspva.north_velocity = vn;
+    inspva.east_velocity = ve;
+    inspva.up_velocity = vu;
+
+    inspva.roll = roll;
+    inspva.pitch = pitch;
+    inspva.azimuth = azimuth;
+
+    _inspva_pub.publish(inspva);
+  }
+
+  // Fill and publish the inspvax
+  {
+    novatel_msgs::INSPVAX inspvax;
+    inspvax.header.gps_week = week_num;
+    inspvax.header.gps_week_seconds = iTow;
+    inspvax.latitude = latitude;
+    inspvax.longitude = longitude;
+    inspvax.altitude = hMSL;
+    inspvax.undulation = hEllips - hMSL;
+
+    inspvax.north_velocity = vn;
+    inspvax.east_velocity = ve;
+    inspvax.up_velocity = vu;
+
+    inspvax.roll = roll;
+    inspvax.pitch = pitch;
+    inspvax.azimuth = azimuth;
+
+    inspvax.latitude_std = hStd;
+    inspvax.longitude_std = hStd;
+    inspvax.altitude_std = vStd;
+
+    inspvax.north_velocity_std = sStd;
+    inspvax.east_velocity_std = sStd;
+    inspvax.up_velocity_std = sStd;
+
+    inspvax.roll_std = _latest_nav_att->accRoll * 1e-5;
+    inspvax.pitch_std = _latest_nav_att->accPitch * 1e-5;
+    inspvax.azimuth_std = _latest_hnr_pvt->headAcc * 1e-5;
+
+    uint8_t availble_pose = _latest_hnr_pvt->FIX_TYPE_2D | _latest_hnr_pvt->FIX_TYPE_3D
+                            | _latest_hnr_pvt->FIX_TYPE_DEAD_RECKONING_ONLY
+                            | _latest_hnr_pvt->FIX_TYPE_GPS_DEAD_RECKONING_COMBINED;
+    if((_latest_hnr_pvt->gpsFix & availble_pose) == 0) {
+      inspvax.position_type = novatel_msgs::INSPVAX::POSITION_TYPE_NONE;
+      inspvax.ins_status = novatel_msgs::INSPVAX::INS_STATUS_INACTIVE;
+    } else {
+      inspvax.position_type = novatel_msgs::INSPVAX::POSITION_TYPE_RTK_FIXED;
+      inspvax.ins_status = novatel_msgs::INSPVAX::INS_STATUS_SOLUTION_GOOD;
+    }
+    _inspvax_pub.publish(inspvax);
+  }
+
+  updater->update();
+}
+
+void AdrUdrProduct::callbackHnrINS(const ublox_msgs::HnrINS &m){
+  ROS_DEBUG("iTOW of HNR-INS : %d", m.iTOW);
+  if (!_latest_hnr_pvt) {
+    ROS_WARN("the _latest_esf_ins is not prepared");
+    ROS_WARN("this ublox_msgs::HnrINS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  if (_latest_hnr_pvt->iTOW != m.iTOW) {
+    ROS_WARN("the _latest_hnr_pvt's iTow(%d) is not same with current hnr_ins's iTow(%d)", 
+      _latest_hnr_pvt->iTOW, m.iTOW);
+    ROS_WARN("this ublox_msgs::HnrINS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  if (_latest_esf_ins->iTOW > m.iTOW) {
+    ROS_WARN("the _latest_esf_ins's iTow(%d) is bigger than current hnr_ins's iTow(%d)",
+      _latest_esf_ins->iTOW, m.iTOW);
+    ROS_WARN("this ublox_msgs::HnrINS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  if(m.iTOW - _latest_esf_ins->iTOW > 500) {
+    ROS_WARN("the _latest_esf_ins's iTow(%d) is less 500ms than current hnr_ins's iTow(%d)",
+      _latest_esf_ins->iTOW, m.iTOW);
+    ROS_WARN("this ublox_msgs::HnrINS(iTow: %d) is dropped", m.iTOW);
+    return;
+  }
+
+  // std::cout << "The accels from        HNR-INS: x(" 
+  //           << _latest_esf_ins->xAccel * 1e-2 << "), y(" 
+  //           << _latest_esf_ins->yAccel * 1e-2 << "), z(" 
+  //           << _latest_esf_ins->zAccel * 1e-2 << ")" << std::endl;
+  // std::cout << "The accels from latest ESF-INS: x(" 
+  //           << _latest_esf_ins->xAccel * 1e-2 << "), y(" 
+  //           << _latest_esf_ins->yAccel * 1e-2 << "), z(" 
+  //           << _latest_esf_ins->zAccel * 1e-2 << ")" << std::endl;
+
+  // Fill and publish the odom
+  {  
+    nav_msgs::Odometry odom;
+    odom.header.frame_id = "ublox_odom";
+    // set the timestamp
+    uint8_t valid_time = _latest_hnr_pvt->VALID_DATE | _latest_hnr_pvt->VALID_TIME |
+                          _latest_hnr_pvt->VALID_FULLY_RESOLVED;
+    if (((_latest_hnr_pvt->valid & valid_time) == valid_time)) {
+      // Use HnrPVT timestamp since it is valid
+      // The time in nanoseconds from the HnrPVT message can be between -1e9 and 1e9
+      //  The ros time uses only unsigned values, so a negative nano seconds must be
+      //  converted to a positive value
+      if (_latest_hnr_pvt->nano < 0) {
+        odom.header.stamp.sec = toUtcSeconds(*_latest_hnr_pvt) - 1;
+        odom.header.stamp.nsec = (uint32_t)(_latest_hnr_pvt->nano + 1e9);
+      }
+      else {
+        odom.header.stamp.sec = toUtcSeconds(*_latest_hnr_pvt);
+        odom.header.stamp.nsec = (uint32_t)(_latest_hnr_pvt->nano);
+      }
+    } else {
+      // Use ROS time since HnrPVT timestamp is not valid
+      // TODO: maybe need throw a error
+      odom.header.stamp = ros::Time::now();
+      ROS_WARN("GPS time is not valid, just use the system time");
+    }
+
+    // Fill the odom.pose
+    double latitude =  _latest_hnr_pvt->lat * 1e-7; // to deg
+    double longitude = _latest_hnr_pvt->lon * 1e-7; // to deg
+    map_proj->FromLatLon(latitude, longitude, odom.pose.pose.position.x, odom.pose.pose.position.y);
+    double hMSL = _latest_hnr_pvt->hMSL * 1e-3; // to [m]
+    odom.pose.pose.position.z = hMSL;
+
+    double yaw_utm = 90.0 - _latest_hnr_pvt->headVeh * 1e-5;
+    yaw_utm = (yaw_utm / 180.0) * M_PI;
+    double yaw_enu_eqdc = yawENU2EQDC(_latest_hnr_pvt->lat, _latest_hnr_pvt->lon,
+                                      odom.pose.pose.position.x, odom.pose.pose.position.y);
+    double yaw_eqdc = yaw_utm + yaw_enu_eqdc;
+
+    double roll = (_latest_nav_att->roll * 1e-5) * M_PI / 180.0;
+    double pitch = (_latest_nav_att->pitch * 1e-5) * M_PI / 180.0;
+
+    tf::Quaternion orientation;
+    orientation.setRPY(roll, -pitch, yaw_eqdc);
+
+    odom.pose.pose.orientation.w = orientation[3];
+    odom.pose.pose.orientation.x = orientation[0];
+    odom.pose.pose.orientation.y = orientation[1];
+    odom.pose.pose.orientation.z = orientation[2];
+
+    double varH = pow(_latest_hnr_pvt->hAcc / 1000.0, 2); // to [m^2]
+    double varV = pow(_latest_hnr_pvt->vAcc / 1000.0, 2); // to [m^2]
+    double varHeading = pow((_latest_hnr_pvt->headAcc * 1e-5) * M_PI / 180.0, 2); // to [radian^2]
+    double varRoll = pow((_latest_nav_att->accRoll * 1e-5) * M_PI / 180.0, 2); // to [radian^2]
+    double varPitch = pow((_latest_nav_att->accPitch * 1e-5) * M_PI / 180.0, 2); // to [radian^2]
+
+    odom.pose.covariance[0] = varH;
+    odom.pose.covariance[7] = varH;
+    odom.pose.covariance[14] = varV;
+    odom.pose.covariance[21] = varRoll;
+    odom.pose.covariance[28] = varPitch;
+    odom.pose.covariance[35] = varHeading;
+
+    // Fill the odom.twist
+    odom.twist.twist.angular.x = (m.xAngRate * 1e-3) * M_PI / 180.0; // to [radian/s]
+    odom.twist.twist.angular.y = -(m.yAngRate * 1e-3) * M_PI / 180.0; // to [radian/s]
+    odom.twist.twist.angular.z = -(m.zAngRate * 1e-3) * M_PI / 180.0; // to [radian/s]
+    
+    double ve = _latest_nav_pvt->velE * 1e-3; // to [m/s]
+    double vn = _latest_nav_pvt->velN * 1e-3; // to [m/s]
+    odom.twist.twist.linear.x = vn * std::sin(yaw_utm) + ve * std::cos(yaw_utm); 
+    odom.twist.twist.linear.y = vn * std::cos(yaw_utm) - ve * std::sin(yaw_utm); 
+    odom.twist.twist.linear.z = _latest_nav_pvt->velD * 1e-3; // to [m/s]
+
+    double varSpeed = pow(_latest_nav_pvt->sAcc * 1e-3, 2);
+    double varAngRate = 1000; // which cannot get from HnrINS
+    odom.twist.covariance[0] = varSpeed;
+    odom.twist.covariance[7] = varSpeed;
+    odom.twist.covariance[14] = varSpeed;
+    odom.twist.covariance[21] = varAngRate;
+    odom.twist.covariance[28] = varAngRate;
+    odom.twist.covariance[35] = varAngRate;
+
+    _odom_pub.publish(odom);
+  }
+
+  updater->update();
 }
 //
 // u-blox High Precision GNSS Reference Station

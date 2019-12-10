@@ -58,6 +58,15 @@
 #include <ublox_gps/utils.h>
 #include <ublox_gps/raw_data_pa.h>
 
+// The plusmap header file
+#include "base/map_proj.h"
+#include "base/plus_flags.h"
+
+// Add the ros topic header needed by drive/lcoalization module
+#include <nav_msgs/Odometry.h>
+#include <novatel_msgs/INSPVA.h>
+#include <novatel_msgs/INSPVAX.h>
+
 // This file declares the ComponentInterface which acts as a high level
 // interface for u-blox firmware, product categories, etc. It contains methods
 // to configure the u-blox and subscribe to u-blox messages.
@@ -119,12 +128,17 @@ int fix_status_service;
 uint16_t meas_rate;
 //! Navigation rate in measurement cycles, see CfgRate.msg
 uint16_t nav_rate;
+//! High Navigation Rate, see CfgHNR.msg
+uint16_t hnr_rate;
 //! IDs of RTCM out messages to configure.
 std::vector<uint8_t> rtcm_ids;
 //! Rates of RTCM out messages. Size must be the same as rtcm_ids
 std::vector<uint8_t> rtcm_rates;
 //! Flag for enabling configuration on startup
 bool config_on_startup_flag_;
+//! The map proj from the drive
+drive::common::base::MapProj::Ptr map_proj;  /// coodinate projection
+
 
 
 //! Topic diagnostics for u-blox messages
@@ -223,6 +237,16 @@ struct FixDiagnostic {
 
 //! fix frequency diagnostic updater
 boost::shared_ptr<FixDiagnostic> freq_diag;
+
+/**
+ * 
+ * @param  lat       : 
+ * @param  lon       : 
+ * @param  x_eqdc    : 
+ * @param  y_eqdc    : 
+ * @return {double}  : 
+ */
+double yawENU2EQDC(double lat, double lon, double x_eqdc, double y_eqdc);
 
 /**
  * @brief Determine dynamic model from human-readable string.
@@ -786,6 +810,8 @@ class UbloxFirmware7Plus : public UbloxFirmware {
       publisher.publish(m);
     }
 
+    // ROS_INFO("iTOW of NAV-PVT : %d", m.iTOW);
+
     //
     // NavSatFix message
     //
@@ -1108,12 +1134,40 @@ class AdrUdrProduct: public virtual ComponentInterface {
   //! Whether or not to enable dead reckoning
   bool use_adr_;
 
-   
+  ros::Publisher _odom_pub;
+  ros::Publisher _imu_pub;
+  ros::Publisher _inspva_pub;
+  ros::Publisher _inspvax_pub;
+
+  std::string _odom_topic;
+  std::string _imu_topic;
+  std::string _inspva_topic;
+  std::string _inspvax_topic;
+
+  ublox_msgs::NavTIMEGPS::Ptr _latest_nav_timegps;
+
+  ublox_msgs::EsfINS::Ptr _latest_esf_ins;
+  ublox_msgs::NavPVT::Ptr _latest_nav_pvt;
+  ublox_msgs::NavATT::Ptr _latest_nav_att;
+  ublox_msgs::HnrPVT::Ptr _latest_hnr_pvt;
+
   sensor_msgs::Imu imu_;
   sensor_msgs::TimeReference t_ref_;
   ublox_msgs::TimTM2 timtm2;
 
+  void callbackNavTIMEGPS(const ublox_msgs::NavTIMEGPS &m);
+
   void callbackEsfMEAS(const ublox_msgs::EsfMEAS &m);
+
+  void callbackEsfINS(const ublox_msgs::EsfINS &m);
+
+  void callbackNavPVT(const ublox_msgs::NavPVT &m);
+
+  void callbackNavATT(const ublox_msgs::NavATT &m);
+ 
+  void callbackHnrPVT(const ublox_msgs::HnrPVT &m);
+
+  void callbackHnrINS(const ublox_msgs::HnrINS &m);
 };
 
 /**

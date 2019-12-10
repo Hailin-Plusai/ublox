@@ -192,6 +192,13 @@ class Gps {
    */
   bool configRate(uint16_t meas_rate, uint16_t nav_rate);
 
+   /**
+   * @brief Set the hdr rate at which the U-Blox devive sends the HnrPVT Msg.
+   * @param  rate    : rate at which the U-Blox devive sends the HnrPVT Msg.
+   * @return {bool}  : true on ACK, false on other conditions.
+   */
+  bool configHnrRate(uint8_t rate);
+
   /**
    * @brief Configure the RTCM messages with the given IDs to the set rate.
    * @param ids the RTCM message ids, valid range: [0, 255]

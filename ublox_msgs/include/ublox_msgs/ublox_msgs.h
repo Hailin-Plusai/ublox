@@ -106,6 +106,7 @@
 #include <ublox_msgs/MgaGAL.h>
 
 #include <ublox_msgs/HnrPVT.h>
+#include <ublox_msgs/HnrINS.h>
 
 #include <ublox_msgs/TimTM2.h>
 
@@ -247,6 +248,7 @@ namespace Message {
 
   namespace HNR {
     static const uint8_t PVT = HnrPVT::MESSAGE_ID;
+    static const uint8_t INS = HnrINS::MESSAGE_ID;
   }
 
   namespace TIM {

@@ -24,6 +24,19 @@ include_directories(${Boost_INCLUDE_DIR})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${catkin_INCLUDE_DIRS})
 
+# Hack code
+set(EXTERNAL_LIB_DIR "/opt/plusai/external/opt")
+link_directories(${EXTERNAL_LIB_DIR}/pcl/lib)
+
+# drive repo libraries
+list(APPEND CMAKE_PREFIX_PATH "/opt/plusai/")
+FIND_PACKAGE(drive REQUIRED)
+MESSAGE(">>> drive_FOUND = ${drive_FOUND}")
+MESSAGE(">>> drive_INCLUDE_DIRS = ${drive_INCLUDE_DIRS}")
+MESSAGE(">>> drive_LIBRARY_DIRS = ${drive_LIBRARY_DIRS}")
+include_directories(${drive_INCLUDE_DIRS}/common)
+link_directories(${drive_LIBRARY_DIRS})
+
 # link pthread
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++11 -pthread")
 
@@ -50,6 +63,7 @@ set_target_properties(ublox_gps_node PROPERTIES OUTPUT_NAME ublox_gps)
 target_link_libraries(ublox_gps_node boost_system boost_regex boost_thread)
 target_link_libraries(ublox_gps_node ${catkin_LIBRARIES})
 target_link_libraries(ublox_gps_node ublox_gps)
+target_link_libraries(ublox_gps_node drive_common)
 
 # build logger node
 add_executable(ublox_logger_node src/logger_node_pa.cpp src/raw_data_pa.cpp)
