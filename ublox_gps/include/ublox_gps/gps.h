@@ -252,6 +252,16 @@ class Gps {
   bool disableTmode3();
 
   /**
+   * @brief Config the CFG-ESFALG by angles in radian
+   * @param  auto_align : Whether to set up the the auto imu-mounting alignment
+   * @param  yaw        : the yaw angle rotate from idea imu coordinate to read imu coordinate
+   * @param  pitch      : the pitch angle rotate from idea imu coordinate to read imu coordinate
+   * @param  roll       : the roll angle rotate from idea imu coordinate to read imu coordinate
+   * @return true on ACK, false on other conditions.
+   */
+  bool configImuALG(bool auto_align, float yaw = 0.0, float pitch = 0.0, float roll = 0.0);
+
+  /**
    * @brief Set the rate at which the U-Blox device sends the given message
    * @param class_id the class identifier of the message
    * @param message_id the message identifier
@@ -297,6 +307,7 @@ class Gps {
    * @return true on ACK, false on other conditions
    */
   bool setDgnss(uint8_t mode);
+
 
   /**
    * @brief Enable or disable ADR (automotive dead reckoning).

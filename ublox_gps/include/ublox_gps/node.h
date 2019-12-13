@@ -685,6 +685,9 @@ class UbloxNode : public virtual ComponentInterface {
   double _last_speed_timestamp;
   uint32_t _last_speed_timetag;
 
+  //! Auto imu alignment
+  bool do_auto_imualg_;
+
   //! raw data stream logging
   RawDataStreamPa rawDataStreamPa_;
 };

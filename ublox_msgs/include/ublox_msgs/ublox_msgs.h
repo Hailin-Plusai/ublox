@@ -68,6 +68,7 @@
 #include <ublox_msgs/CfgCFG.h>
 #include <ublox_msgs/CfgDAT.h>
 #include <ublox_msgs/CfgDGNSS.h>
+#include <ublox_msgs/CfgESFALG.h>
 #include <ublox_msgs/CfgGNSS.h>
 #include <ublox_msgs/CfgHNR.h>
 #include <ublox_msgs/CfgINF.h>
@@ -97,6 +98,7 @@
 #include <ublox_msgs/AidEPH.h>
 #include <ublox_msgs/AidHUI.h>
 
+#include <ublox_msgs/EsfALG.h>
 #include <ublox_msgs/EsfINS.h>
 #include <ublox_msgs/EsfMEAS.h>
 #include <ublox_msgs/EsfRAW.h>
@@ -212,6 +214,7 @@ namespace Message {
     static const uint8_t HNR = CfgHNR::MESSAGE_ID;
     static const uint8_t INF = CfgINF::MESSAGE_ID;
     static const uint8_t DGNSS = CfgDGNSS::MESSAGE_ID;
+    static const uint8_t ESFALG = CfgESFALG::MESSAGE_ID;
     static const uint8_t MSG = CfgMSG::MESSAGE_ID;
     static const uint8_t NAV5 = CfgNAV5::MESSAGE_ID;
     static const uint8_t NAVX5 = CfgNAVX5::MESSAGE_ID;
@@ -236,6 +239,7 @@ namespace Message {
   }
 
   namespace ESF {
+    static const uint8_t ALG = EsfALG::MESSAGE_ID;
     static const uint8_t INS = EsfINS::MESSAGE_ID;
     static const uint8_t MEAS = EsfMEAS::MESSAGE_ID;
     static const uint8_t RAW = EsfRAW::MESSAGE_ID;

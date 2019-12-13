@@ -470,6 +470,23 @@ bool Gps::disableTmode3() {
   return configure(tmode3);
 }
 
+bool Gps::configImuALG(bool auto_align, float yaw, float pitch, float roll) {
+  if (auto_align) {
+    ROS_DEBUG("Enabling auto imu alignment");
+  }
+  else {
+    ROS_DEBUG("Disabling auto imu alignment");
+    ROS_DEBUG("Setting imu alignment with yaw(%f), pitch(%f), roll(%f)", yaw,
+              pitch, roll);
+  }
+  ublox_gps::CfgESFALG cfg_esfalg;
+  cfg_esfalg.bitfield = auto_align ? ublox_gps::CfgESFALG::DO_AUTO_MNTALG : 0;
+  cfg_esfalg.yaw = uint32_t(yaw * 100);
+  cfg_esfalg.pitch = uint32_t(pitch * 100);
+  cfg_esfalg.roll = uint32_t(roll * 100);
+  return configure(cfg_esfalg);
+}
+
 bool Gps::setRate(uint8_t class_id, uint8_t message_id, uint8_t rate) {
   ROS_DEBUG_COND(debug >= 2, "Setting rate 0x%02x, 0x%02x, %u", class_id,
                  message_id, rate);

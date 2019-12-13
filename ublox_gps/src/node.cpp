@@ -147,6 +147,9 @@ void UbloxNode::getRosParams() {
   getRosUint("save/mask", save_.saveMask, 0);
   getRosUint("save/device", save_.deviceMask, 0);
 
+  // Auto imu alignment
+  nh->param("imu_align", do_auto_imualg_, false);
+
   // UART 1 params
   getRosUint("uart1/baudrate", baudrate_, 9600);
   getRosUint("uart1/in", uart_in_, ublox_msgs::CfgPRT::PROTO_UBX
@@ -273,6 +276,7 @@ void UbloxNode::subscribe() {
 
   // Nav Messages
   nh->param("publish/nav/status", enabled["nav_status"], enabled["nav"]);
+  std::cout << "enabled[nav_status] : " << enabled["nav_status"] << std::endl;
   if (enabled["nav_status"])
     gps.subscribe<ublox_msgs::NavSTATUS>(boost::bind(
         publish<ublox_msgs::NavSTATUS>, _1, "navstatus"), kSubscribeRate);
@@ -338,6 +342,11 @@ void UbloxNode::subscribe() {
   if (enabled["aid_hui"])
     gps.subscribe<ublox_msgs::AidHUI>(boost::bind(
         publish<ublox_msgs::AidHUI>, _1, "aidhui"), kSubscribeRate);
+
+  if (do_auto_imualg_) {
+    gps.subscribe<ublox_msgs::EsfALG>(boost::bind(
+        publish<ublox_msgs::EsfALG>, _1, "esfalg"), kSubscribeRate);
+  }
 
   for(int i = 0; i < components_.size(); i++)
     components_[i]->subscribe();
@@ -494,6 +503,13 @@ bool UbloxNode::configureUblox() {
           return false;
       }
     }
+
+    if (do_auto_imualg_) {
+      if(!gps.configImuALG(true)) {
+        throw std::runtime_error("Failed to enable the auto imu alignment");
+      }
+    }
+
     if (save_.saveMask != 0) {
       ROS_DEBUG("Saving the u-blox configuration, mask %u, device %u",
                 save_.saveMask, save_.deviceMask);
@@ -632,8 +648,38 @@ void UbloxNode::initialize() {
 
 void UbloxNode::shutdown() {
   if (gps.isInitialized()) {
+
+    // Save the auto imu alignment values
+    if(do_auto_imualg_) {
+      ublox_msgs::EsfALG esf_alg;
+      if (!gps.poll(esf_alg)) {
+        std::cout << "Cannot poll the latest ESF-ALG from device";
+      }
+      else {
+        float yaw = float(esf_alg.yaw) * 1e-2;
+        float pitch = float(esf_alg.pitch) * 1e-2;
+        float roll = float(esf_alg.roll) * 1e-2;
+        std::cout << "Latest ESF-ALG value : yaw(" << yaw << "), pitch("
+                  << pitch << "), roll(" << roll << ")" << std::endl;
+        if (!gps.configImuALG(false, yaw, pitch, roll)) {
+          std::cout << "u-blox unable to save imu alignment configuration" << std::endl;
+        }
+        else {
+          if (save_.saveMask != 0) {
+            std::cout << "Saving the u-blox configuration, mask "
+                      << save_.saveMask << ", device " << save_.deviceMask
+                      << std::endl;
+            if (!gps.configure(save_))
+              std::cout << "u-blox unable to save configuration to "
+                           "non-volatile memory"
+                        << std::endl;
+          }
+        }
+      }
+    }
+
     gps.close();
-    ROS_INFO("Closed connection to %s.", device_.c_str());
+    std::cout << "Closed connection to " << device_.c_str() << std::endl;
   }
 }
 
