@@ -91,8 +91,6 @@ uint8_t ublox_node::fixModeFromString(const std::string& mode) {
 // u-blox ROS Node
 //
 UbloxNode::UbloxNode() {
-  _last_speed_timestamp = NAN;
-  _last_speed_timetag = 0;
   initialize();
 }
 
@@ -351,9 +349,6 @@ void UbloxNode::subscribe() {
   for(int i = 0; i < components_.size(); i++)
     components_[i]->subscribe();
 
-  _steering_sub = nh->subscribe("/vehicle/steering_report", 1, &UbloxNode::steeringCallBack, this);
-  _send_speed_pub =
-      nh->advertise<dbw_mkz_msgs::SteeringReport>("speed_send", kROSQueueSize);
 }
 
 void UbloxNode::initializeRosDiagnostics() {
@@ -580,29 +575,6 @@ void UbloxNode::initializeIo() {
       boost::bind(&RawDataStreamPa::ubloxCallback,&rawDataStreamPa_, _1, _2));
     rawDataStreamPa_.initialize();
   }
-}
-
-void UbloxNode::steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& steering_report) {
-    double timestamp = steering_report->header.stamp.toSec();
-    uint32_t timetag = 0;
-    if(!std::isnan(_last_speed_timestamp)) {
-      double delta_time = timestamp - _last_speed_timestamp;
-      timetag = _last_speed_timetag + uint32_t(delta_time*1000);
-    }
-
-    // ROS_INFO("send timetag : %d", timetag);
-    bool do_send = std::isnan(_last_speed_timestamp) || ((timetag % 100) < (_last_speed_timetag % 100));
-    if (do_send)
-    {
-      gps.sendSpeed(timetag, steering_report->speed);
-      dbw_mkz_msgs::SteeringReport steering_report_ = *steering_report;
-      steering_report_.header.stamp = ros::Time::now();
-      steering_report_.header.seq = timetag;
-      _send_speed_pub.publish(steering_report_);
-    }
-
-    _last_speed_timestamp = timestamp;
-    _last_speed_timetag = timetag;
 }
 
 void UbloxNode::initialize() {
@@ -1376,6 +1348,20 @@ void RawDataProduct::initializeRosDiagnostics() {
 //
 // u-blox ADR devices, partially implemented
 //
+AdrUdrProduct::AdrUdrProduct(){
+  _last_speed_timestamp = NAN;
+  _last_speed_timetag = 0;
+  _steering_sub = nh->subscribe("/vehicle/steering_report", 1, &AdrUdrProduct::steeringCallBack, this);
+  _send_speed_pub =
+      nh->advertise<dbw_mkz_msgs::SteeringReport>("speed_send", kROSQueueSize);
+
+  // Add the publishers which are use by the drive
+  _odom_pub = nh->advertise<nav_msgs::Odometry>(_odom_topic, kROSQueueSize);
+  _imu_pub = nh->advertise<sensor_msgs::Imu>(_imu_topic, kROSQueueSize);
+  _inspva_pub = nh->advertise<novatel_msgs::INSPVA>(_inspva_topic, kROSQueueSize);
+  _inspvax_pub = nh->advertise<novatel_msgs::INSPVAX>(_inspvax_topic, kROSQueueSize);
+}
+
 void AdrUdrProduct::getRosParams() {
   nh->param("use_adr", use_adr_, true);
   nh->param("odom_topic", _odom_topic, std::string("odom"));
@@ -1462,12 +1448,28 @@ void AdrUdrProduct::subscribe() {
     gps.subscribe<ublox_msgs::HnrINS>(boost::bind(
       &AdrUdrProduct::callbackHnrINS, this, _1), kSubscribeRate);
   }
+}
 
-  // Add the publishers which are use by the drive
-  _odom_pub = nh->advertise<nav_msgs::Odometry>(_odom_topic, kROSQueueSize);
-  _imu_pub = nh->advertise<sensor_msgs::Imu>(_imu_topic, kROSQueueSize);
-  _inspva_pub = nh->advertise<novatel_msgs::INSPVA>(_inspva_topic, kROSQueueSize);
-  _inspvax_pub = nh->advertise<novatel_msgs::INSPVAX>(_inspvax_topic, kROSQueueSize);
+void AdrUdrProduct::steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& steering_report) {
+    double timestamp = steering_report->header.stamp.toSec();
+    uint32_t timetag = 0;
+    if(!std::isnan(_last_speed_timestamp)) {
+      double delta_time = timestamp - _last_speed_timestamp;
+      timetag = _last_speed_timetag + uint32_t(delta_time*1000);
+    }
+
+    // ROS_INFO("send timetag : %d", timetag);
+    bool do_send = std::isnan(_last_speed_timestamp) || ((timetag % 100) < (_last_speed_timetag % 100));
+    if (do_send) {
+      gps.sendSpeed(timetag, steering_report->speed);
+      dbw_mkz_msgs::SteeringReport steering_report_ = *steering_report;
+      steering_report_.header.stamp = ros::Time::now();
+      steering_report_.header.seq = timetag;
+      _send_speed_pub.publish(steering_report_);
+    }
+
+    _last_speed_timestamp = timestamp;
+    _last_speed_timetag = timetag;
 }
 
 void AdrUdrProduct::callbackEsfMEAS(const ublox_msgs::EsfMEAS &m) {

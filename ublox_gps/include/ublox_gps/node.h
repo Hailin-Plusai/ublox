@@ -615,12 +615,6 @@ class UbloxNode : public virtual ComponentInterface {
    */
   void configureInf();
 
-  /**
-     * @brief callback function of wheel speed topic
-     * @param steering_report message
-     */
-  void steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& steering_report);
-
   //! The u-blox node components
   /*!
    * The node will call the functions in these interfaces for each object
@@ -678,12 +672,6 @@ class UbloxNode : public virtual ComponentInterface {
   ublox_msgs::CfgCFG save_;
   //! rate for TIM-TM2
   uint8_t tim_rate_;
-
-  //! ros subscriber for wheel speed
-  ros::Subscriber _steering_sub;
-  ros::Publisher _send_speed_pub;
-  double _last_speed_timestamp;
-  uint32_t _last_speed_timetag;
 
   //! Auto imu alignment
   bool do_auto_imualg_;
@@ -1102,6 +1090,8 @@ class RawDataProduct: public virtual ComponentInterface {
  */
 class AdrUdrProduct: public virtual ComponentInterface {
  public:
+  AdrUdrProduct();
+
   /**
    * @brief Get the ADR/UDR parameters.
    *
@@ -1133,6 +1123,12 @@ class AdrUdrProduct: public virtual ComponentInterface {
              "unimplemented. See AdrUdrProduct class in node.h & node.cpp.");
   }
 
+  /**
+     * @brief callback function of wheel speed topic
+     * @param steering_report message
+     */
+  void steeringCallBack(const dbw_mkz_msgs::SteeringReport::ConstPtr& steering_report);
+
  protected:
   //! Whether or not to enable dead reckoning
   bool use_adr_;
@@ -1153,6 +1149,16 @@ class AdrUdrProduct: public virtual ComponentInterface {
   ublox_msgs::NavPVT::Ptr _latest_nav_pvt;
   ublox_msgs::NavATT::Ptr _latest_nav_att;
   ublox_msgs::HnrPVT::Ptr _latest_hnr_pvt;
+
+  //! ros subscriber for wheel speed
+  ros::Subscriber _steering_sub;
+  ros::Publisher _send_speed_pub;
+  double _last_speed_timestamp;
+  uint32_t _last_speed_timetag;
+
+  // wheel odometry members
+  ros::Publisher _wheel_odom_pub;
+  nav_msgs::Odometry::Ptr _last_wheel_odom;
 
   sensor_msgs::Imu imu_;
   sensor_msgs::TimeReference t_ref_;
